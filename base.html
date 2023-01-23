@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="ja">
+
+<head>
+	<title>Proofread Document Tool</title>
+	<meta charset="UTF-8">
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@300&display=swap" rel="stylesheet">
+	<style>
+		* {
+			font-family: 'Noto Serif JP', serif;
+		}
+
+		body {
+			text-align: center;
+		}
+
+		h1.tool-title {
+			color: rgb(57, 57, 57);
+			padding-left: 1em;
+			font-weight: 900;
+		}
+
+		h2 {
+			color: rgb(57, 57, 57);
+			margin-top: 2em;
+		}
+
+		.note {
+			width: 50%;
+			text-align: center;
+			margin-left: auto;
+			margin-right: auto;
+		}
+
+		button {
+			margin-top: 1em;
+			background-color: darkgray;
+			border-radius: 10px;
+			border-color: rgb(40, 40, 40);
+			color: #fff;
+			padding: 5px 30px;
+			font-size: medium;
+		}
+		.table-area {
+			text-align: center;
+			margin-left: auto;
+			margin-right: auto;
+		}
+		table {
+			width: 80%;
+		}
+	</style>
+</head>
+
+<body>
+	<div id="app">
+		<h1 class="tool-title">Proofread Document Tool</h1>
+		<h2>NOTE</h2>
+		<div clsss="note">
+			<p>Excelファイルにのみ対応しています。</p>
+		</div>
+		<h2>INPUT</h2>
+		<input type="file" id="excelFile" /><br>
+		<button v-on:click="doFormat">EXECUTE</button>
+		<h2>OUTPUT</h2>
+		<div class="table-area">
+			<table align="center" border="1" v-show="apiResultList.length > 0">
+				<tr>
+					<th>Sheet</th>
+					<th>Cell</th>
+					<th>Status</th>
+					<th>Error</th>
+					<th>Checked Sentence</th>
+				</tr>
+				<tr v-for="result in apiResultList" v-on:key="result.resultId">
+					<td>{{ result["sheetName"] }}</td>
+					<td>{{ result["cellAddress"] }}</td>
+					<td>Non</td>
+					<td>{{ result["message"] }}</td>
+					<td>{{ result["checkedSentence"] }}</td>
+				</tr>
+			</table>
+		</div>
+
+	</div>
+</body>
+<script src="https://unpkg.com/vue@2.5.17"></script>
+<script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"
+	integrity="sha256-/xUj+3OJU5yExlq6GSYGSHk7tPXikynS7ogEvDej/m4=" crossorigin="anonymous"></script>
+<script src="./logics/checkExtension.js"></script>
+<script src="./logics/getAllCellAddressAndValue.js"></script>
+<script src="./logics/ProofReadingAPIInfo.js"></script>
+<script>
+	// ロードされ、Vueがグローバル変数として定義されているか確認
+	console.assert(typeof Vue !== 'undefined');
+	// ファイル不正メッセージ
+	const FILE_FORMAT_ERROR_MSG = "ファイルの拡張子が対応していない拡張子です。";
+
+	new Vue({
+		el: '#app',
+
+		data: {
+			// 校正対象文言リスト{シート名, セルアドレス, 値}のフォーマットで格納
+			cellValueList: [],
+			// APIリクエストパラメータ
+			param: {},
+			// APIレスポンス結果格納リスト{シート名, セルアドレス, errorFlag, status, message, checkedSentence}
+			apiResultList: []
+		},
+
+		methods: {
+			/**
+			 * 「チェック開始」ボタン押下時のイベント
+			*/
+			doFormat: function () {
+				const vm = this;
+				vm.errorList = [];
+
+				// 拡張子チェック
+				const fileName = document.getElementById("excelFile").files[0].name;
+				if (checkExtension(fileName) === false) {
+					alert(FILE_FORMAT_ERROR_MSG);
+					return;
+				}
+
+				vm.fileName = fileName;
+
+				// ファイル内容取得および整形の実処理部分
+				let fileReader = new FileReader();
+				fileReader.onload = function (event) {
+					// ファイル内容取得
+					let uint8 = new Uint8Array(event.target.result);
+					let workBook = XLSX.read(uint8, { type: "array" });
+
+					// 全てのシートの値の入ったセルのアドレスと値を取得
+					vm.cellValueList = getAllCellAddressAndValue(workBook);
+
+					// ProofReading APIリクエスト準備
+					let proofReadingAPIInfo = new ProofReadingAPIInfo();
+					// API URL取得
+					let url = proofReadingAPIInfo.getUrl();
+					// APIキーをリクエストに設定
+					vm.param.apikey = proofReadingAPIInfo.getApiKey();
+
+					for (let cellValueObj of vm.cellValueList) {
+						// リクエストパラメータ追加
+						vm.param.sensitivity = proofReadingAPIInfo.getSensitivity();
+						vm.param.sentence = cellValueObj.cellValue;
+
+						// APIリクエスト実行
+						try {
+							$.ajax({
+								type: 'post',
+								url: 'https://api.a3rt.recruit.co.jp/proofreading/v2/typo',
+								dataType: 'jsonp',
+								jsonpCallback: 'callback',
+								data: vm.param,
+								success: function (json) {
+									vm.apiResultList.push({
+										sheetName: cellValueObj.sheetName,
+										cellAddress: cellValueObj.cellAddress,
+										errorFlag: false,
+										resultId: json.resultID,
+										status: json.status,
+										message: json.message,
+										checkedSentence: json.checkedSentence
+									});
+									console.log(json);
+								}
+							});
+						} catch (e) {
+							console.log(e);
+							vm.apiResultList.push({
+								sheetName: cellValueObj.sheetName,
+								cellAddress: cellValueObj.cellAddress,
+								errorFlag: true,
+								resultId: null,
+								status: null,
+								message: "error was happened",
+								checkedSentence: null
+							});
+						}
+					}
+					console.log(vm.apiResultList);
+				}
+
+				// ファイル読み込み
+				let file = document.getElementById("excelFile").files[0];
+				fileReader.readAsArrayBuffer(file);
+			},
+		}
+	});
+</script>
+
+</html>
